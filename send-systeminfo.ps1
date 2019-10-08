@@ -1,20 +1,34 @@
-$deviceUUID = [guid]::NewGuid()
+$initialSetupRegistryTest = Test-Path HKLM:\SOFTWARE\InfoPull
+$dateTimeNow = Get-Date -Format 'MM\/dd\/yyyy HH:mm:ss'
 
-$deviceGuidRegistryPathTest = Test-Path HKLM:\SOFTWARE\InfoPull
-
-if(!$deviceGuidRegistryPathTest) {
+if(!$initialSetupRegistryTest) {
+  Write-Host "Running Initial Setup" -ForegroundColor Green
+  $deviceUUID = [guid]::NewGuid()
   New-Item -Path HKLM:\SOFTWARE\InfoPull
   New-ItemProperty -Path HKLM:\SOFTWARE\InfoPull -Name DeviceGuid -Value $deviceUUID
-  $registryKey = Get-ItemProperty HKLM:\SOFTWARE\InfoPull
+  $registryKey = Get-ItemProperty HKLM:\SOFTWARE\InfoPull -Name DeviceGuid
   if($registryKey) {
     Write-Host "Key created successfully" -ForegroundColor Green 
   }
+  New-ItemProperty -Name setupDate -Value $dateTimeNow
 }
 
 if(Get-ItemProperty -Path HKLM:\SOFTWARE\InfoPull -Name DeviceGuid) {
-  Write-Host "Device GUID already exists" -ForegroundColor Green
+  Write-Host "Device GUID already exists and does not need to be created" -ForegroundColor Yellow
 } else {
-  Write-Host "creating Device GUID"
+  Write-Host "creating Device GUID" -ForegroundColor Yellow
+  New-ItemProperty -Path HKLM:\SOFTWARE\InfoPull -Name DeviceGuid -Value ([guid]::NewGuid())
+}
+
+$initialSetupComplete = Get-ItemProperty -Path HKLM:\SOFTWARE\InfoPull -Name setupComplete
+
+if($initialSetupComplete) {
+  Write-Host "Device has already been registered and setup" -ForegroundColor Yellow
+  $firstTimeRun = $false
+} else {
+  Write-Host "Creating new entry in database" -ForegroundColor Yellow
+  New-ItemProperty -Path HKLM:\SOFTWARE\InfoPull -Name setupComplete -Value 0
+  $firstTimeRun = $true
 }
 
 $deviceGuidFromRegistry = (Get-ItemProperty -Path HKLM:\SOFTWARE\InfoPull -Name DeviceGuid).DeviceGuid
@@ -55,7 +69,7 @@ switch ($computerInfo.DomainRole) {
 
   Default {$domainRole = 'Workstation'}
 }
-$testGuid = "1ffc7983-bd66-45d2-a291-26b863ab91ff"
+
 $totalMemoryGB = [math]::Round($computerInfo.TotalPhysicalMemory / 1073741824)
 $diskFreeSpaceInGB = [math]::Round($diskInfo.FreeSpace / 1073741824)
 
@@ -82,10 +96,45 @@ $sysInfoHashTable = @{
   deviceGuid = $deviceGuidFromRegistry
 }
 
-$deviceGuidFromRegistry
-
-$uri = 'http://127.0.0.1:4000/api/ps/update'
 $headers = @{
   'api_key' = 'x9laz16obki5xt9f6t9t07'
 }
-Invoke-RestMethod -Uri $uri -Method Put -Headers $headers -Body $sysInfoHashTable -ContentType "application/x-www-form-urlencoded"
+
+if($firstTimeRun) {
+  $uri = 'http://127.0.0.1:4000/api/ps/add'
+  $sysInfoHashTable.name
+  Write-Host "Invoking POST Request" -ForegroundColor Yellow
+  try {
+    $updateData = Invoke-RestMethod -Uri $uri -Method Post -Headers $headers -Body $sysInfoHashTable
+    if($updateData.saved) {
+      Write-Host "Data saved to database" -ForegroundColor Green
+      New-ItemProperty -Path HKLM:\SOFTWARE\InfoPull -Name dataUpdated -Value $dateTimeNow
+    }
+  }
+  catch {
+    $ErrorMessage = $_.Exception.Message
+    $FailedItem = $_.Exception.ItemName
+    write-host $ErrorMessage -ForegroundColor Red
+  }
+
+  Set-ItemProperty -Path HKLM:\SOFTWARE\InfoPull -Name setupComplete -Value 1
+  Write-Host "Writing registry value for setupComplete" -ForegroundColor Green
+
+} else {
+  $uri = 'http://127.0.0.1:4000/api/ps/update'
+  Write-Host "Invoking PUT Request" -ForegroundColor Yellow
+  try {
+    $updateData = Invoke-RestMethod -Uri $uri -Method Put -Headers $headers -Body $sysInfoHashTable -ContentType "application/x-www-form-urlencoded"
+
+    if($updateData.updateComplete) {
+      Write-Host "Data updated successfully" -ForegroundColor Green
+      Set-ItemProperty -Path HKLM:\SOFTWARE\InfoPull -Name dataUpdated-Value $dateTimeNow
+  }
+  }
+  catch {
+    $ErrorMessage = $_.Exception.Message
+    $FailedItem = $_.Exception.ItemName
+    write-host $ErrorMessage -ForegroundColor Red
+  }
+  
+}
